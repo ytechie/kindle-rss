@@ -48,7 +48,7 @@ function loadDatabase(config, callback) {
 		console.log('Database Loaded: ');
 	  
 		var db = JSON.parse(data);
-		console.log(db);
+		//console.log(db);
 		callback(db);
 	});
 }
@@ -104,9 +104,9 @@ function checkFeeds(config, db) {
 
 
 		if(db.feeds[feedUrl]) {
-	    	console.log('Feed was found in database');
+	    	//console.log('Feed was found in database');
 	    } else {
-	    	console.log('Feed was not found in database')
+	    	//console.log('Feed was not found in database')
 	    	db.feeds[feedUrl] = {};
 	    }
 	    feedDb = db.feeds[feedUrl];
@@ -164,7 +164,8 @@ function checkFeed(config, feedDb, feedUrl, callback) {
 	    , item;
 
 	  while (item = stream.read()) {
-	  	console.log('Processing ' + item.title + '...');
+	  	process.stdout.write("*");
+	  	//console.log('Processing ' + item.title + '...');
 	    //console.log(item.description);
 
 	    //Check if this is the newest (or first) item
@@ -185,22 +186,35 @@ function emailRssItem(config, feedItem) {
 	var fileName = Math.floor(Math.random() * 1000000000);
 	var file = process.env['TEMP'] + "\\" + fileName + '.html';
 	fs.writeFile(file, body);
+
+	var cleanTitle = feedItem.title
+		.replace("<", "")
+		.replace(">", "")
+		.replace(":", "")
+		.replace('"', "")
+		.replace("/", "")
+		.replace("\\", "")
+		.replace("|", "")
+		.replace("?", "")
+		.replace("*", "");
+
+
 	convertRssItem(file, function(outFile) {
 		console.log('Converted to ' + outFile);
 
 			var email     = new sendgrid.Email({
-		//  to:       'jason@ytechie.com',
-		  to:       config.kindleEmail,
+		  to:       [config.kindleEmail],
 		  from:     config.SendGridFromEmail,
+		  replyto: 'jason@ytechie.com', //for troubleshooting
 		  subject:  'convert', //Tells the kindle to conver it to it's internal format
-		  text:     'this is the body'
+			text: 'Your article via RSS as requested.'
 		});
 
 		email.addFile({
 		 // filename: 'post.docx',
 		  //content: body
-		  filename: feedItem.title,
-		  path: outFile
+		  filename: cleanTitle + '.docx',
+		  path: outFile,
 		});
 
 		console.log('Emailing ' + feedItem.title);
