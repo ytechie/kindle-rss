@@ -1,133 +1,112 @@
+var Q = require("q");
 var fs = require('fs');
 var request = require('request');
 var exec = require('child_process').exec;
-//var process = require('process');
+var FeedParser = require('feedparser');
 
-loadConfig(function(config) {
-	loadDatabase(config, function(db) {
-		getPanDoc(config, function() {
-			checkFeeds(config, db);
-		});
-	});
-});
+var articleExporter = require('./articleExporter.js');
+var fileDatabase = require('./fileDatabase.js');
 
-//loadConfig(function() {console.log('here')});
+run();
 
-function loadConfig(callback) {
+function run() {
+	var config;
+	var cache;
+
+	fileDatabase.loadFileCache()
+		.then(function(loadedCache) {
+			cache = loadedCache;
+
+			console.log('Cache:');
+			console.log(JSON.stringify(cache));
+		})
+		.then(loadConfig)
+		.then(function(loadedConfig) {
+			config = loadedConfig;
+		})
+		.then(articleExporter.initialize)
+		.then(function() {
+			return processAllFeeds(
+				{
+					feeds: config.Feeds,
+					cache: cache,
+					send: function(feedItem, file, cb) {
+						emailRssItem({feedItem: feedItem, config: config, file: file}, cb);
+					}
+				});
+		})
+		.then(function() {
+			return fileDatabase.saveFileCache(cache);
+		})
+		.catch(function(error) {
+			console.error(error);
+		})
+		.done();
+}
+
+
+function loadConfig() {
+	var deferral = Q.defer();
+
 	console.log('Loading configuration...');
 	fs.readFile('config.json', function (err, data) {
-	  if (err) throw err;
+	  if (err) deferral.reject(err);
 	  console.log('Config Loaded: ');
 	  
 	  var config = JSON.parse(data);
 	  console.log(config);
-	  callback(config);
+	  deferral.resolve(config);
 	});
+
+	return deferral.promise;
 }
 
-function loadDatabase(config, callback) {
-	/*
-	fs.exists(config.DbFile, function(exists) {
-		if(!exists) {
-			console.log('Creating local database...');
-			saveDatabase({feeds: []}, function() {
-				loadDatabase(config, callback);
-			});
-		} else {*/
-	console.log('Loading local database...');
 
-	fs.readFile(config.DbFile, function (err, data) {
-		if (err) {
-			saveDatabase(config, {feeds: {}}, function() {
-				//Try again after creating
-				loadDatabase(config, callback);
-			});
-			return;
-		}
-	
-		console.log('Database Loaded: ');
-	  
-		var db = JSON.parse(data);
-		//console.log(db);
-		callback(db);
-	});
-}
-
-function saveDatabase(config, db, callback) {
-	//console.log('Saving local database...');
-	//console.log(JSON.stringify(db));
-
-	//This is a bottneck since it's sync
-	fs.writeFileSync(config.DbFile, JSON.stringify(db));//, function() {
-		console.log('Database saved');
-		if(callback) callback();
-	//});
-}
-
-function download(url, dest, cb) {	
-  var file = fs.createWriteStream(dest);
-  request(url).on('end', function() {
-  	file.close(cb);
-  }).pipe(file);
-}
-
-function getPanDoc(config, callback) {
-	fs.exists('Pandoc\\pandoc.exe', function(exists) {
-		if(exists) {
-			callback();
-		} else {
-			var msi = process.env['TEMP'] + '\\pandoc.msi';
-		console.log('Downloading PanDoc MSI from ' + config.PanDocMSIUrl);
-		//download msi
-		download(config.PanDocMSIUrl, msi, function() {
-			console.log('Pandoc download complete');
-			//extract MSI
-			var cmd = 'msiexec /a ' + msi + ' /qn TARGETDIR="' + __dirname + '"';
-			console.log('Extracting MSI using ' + cmd);
-			exec(cmd).on('exit', function() {
-				console.log('PanDoc Extracted');
-				callback();
-			});
-		});	
-		}
-	});
-}
-
-function checkFeeds(config, db) {
+function processAllFeeds(options) {
+	//options.feeds
+	//options.cache
+	//options.send
 
 	var feedUrl;
 	var feedDb;
+	var feedPromises = [];
+	var feeds = options.feeds;
+	var cache = options.cache;
 
-	for(var i = 0; i < config.Feeds.length; i++) {
-		feedUrl = config.Feeds[i];
-		console.log('Processing ' + feedUrl);
+	console.log('Processing ' + feeds.length + ' feeds...');
 
+	for(var i = 0; i < feeds.length; i++) {
+		feedUrl = options.feeds[i];
 
-		if(db.feeds[feedUrl]) {
-	    	//console.log('Feed was found in database');
-	    } else {
-	    	//console.log('Feed was not found in database')
-	    	db.feeds[feedUrl] = {};
-	    }
-	    feedDb = db.feeds[feedUrl];
+		//Initialize our cache for the feed if needed
+		if(!cache.feeds[feedUrl]) {
+			cache.feeds[feedUrl] = {};
+		}
 
-		checkFeed(config, feedDb, feedUrl, function() {
-			saveDatabase(config, db);
-		});
-
+		feedPromises[i] = processFeed(
+			{
+				feedUrl: feedUrl,
+				feedCache: cache.feeds[feedUrl], //passed by ref
+				send: options.send
+			});
 	}
+
+	return Q.allSettled(feedPromises);
 }
 
-function checkFeed(config, feedDb, feedUrl, callback) {
-	var FeedParser = require('feedparser')
-	  , request = require('request');
-	var newestItem;
+function processFeed(options) {
+	// options.feedUrl
+	// options.feedCache
+	// options.send
 
-	var req = request(feedUrl)
-	  , feedparser = new FeedParser({});
+	var deferral = Q.defer();
+
+	var newestItem;
+	var req = request(options.feedUrl),
+		feedparser = new FeedParser({});
 
 	req.on('error', function (error) {
-	  console.log('Feed read error: ' + error);
+		deferral.reject(error);
 	});
 	req.on('response', function (res) {
 	  var stream = this;
@@ -137,25 +116,37 @@ function checkFeed(config, feedDb, feedUrl, callback) {
 	  stream.pipe(feedparser);
 
 	  stream.on('end', function() {
-	  	console.log('Done processing ' + feedUrl);
+	  	console.log('Done processing ' + options.feedUrl);
 
 	  	//Note: this will send the latest of each feed the first time
 
-	  	feedDb.newestItem = newestItem.pubDate;
-	  	if(!feedDb.lastPubDateSent || feedDb.lastPubDateSent < feedDb.newestItem) {
-	  		feedDb.lastPubDateSent = feedDb.newestItem;
+	  	if(newestItem) {
+		  	options.feedCache.newestItem = newestItem.pubDate;
+		  	if(!options.feedCache.lastPubDateSent || options.feedCache.lastPubDateSent < options.feedCache.newestItem) {
+		  		console.log('Exporting article "' + newestItem.title + '"...')
 
-	  		console.log('sending the user ' + newestItem.title)
-	  		
-	  		emailRssItem(config, newestItem);
-	  	}
-
-		if(callback) callback();
+		  		articleExporter.exportArticle(newestItem.title, newestItem.body)
+		  			.then(function(fileName) {
+		  				console.log('Sending article...');
+		  				options.send(newestItem, fileName, function() {
+		  					//item sent!
+		  					options.feedCache.lastPubDateSent = options.feedCache.newestItem;
+		  					console.log('Sent successfully');
+		  					deferral.resolve();
+		  				});
+		  			});
+		  	} else {
+		  		deferral.resolve();
+		  	}
+		  } else {
+		  	console.log('No items in the feed');
+		  	deferral.resolve();
+		  }
 	  });
 	});
 
 	feedparser.on('error', function(error) {
-	  // always handle errors
+	  deferral.reject(error);
 	});
 	feedparser.on('readable', function() {
 	  // This is where the action is!
@@ -164,28 +155,22 @@ function checkFeed(config, feedDb, feedUrl, callback) {
 	    , item;
 
 	  while (item = stream.read()) {
-	  	process.stdout.write("*");
-	  	//console.log('Processing ' + item.title + '...');
-	    //console.log(item.description);
-
 	    //Check if this is the newest (or first) item
 	    if(!newestItem || item.pubDate > newestItem.pubDate) {
 			newestItem = item;
 		}
 	  }  
 	});
+
+	return deferral.promise;
 }
 
-function emailRssItem(config, feedItem) {
+function emailRssItem(options, cb) {
+	var feedItem = options.feedItem;
+	var file = options.file;
+	var config = options.config;
+
 	var sendgrid  = require('sendgrid')(config.SendGridApiUser, config.SendGridApiKey);
-
-	//wrap the body so Amazon recognizes it
-	var body = '<html><head><title>' + feedItem.title + '</title></head><body>' + feedItem.description + '</body></html>';
-
-	//Save the post to a temp file
-	var fileName = Math.floor(Math.random() * 1000000000);
-	var file = process.env['TEMP'] + "\\" + fileName + '.html';
-	fs.writeFile(file, body);
 
 	var cleanTitle = feedItem.title
 		.replace("<", "")
@@ -199,47 +184,29 @@ function emailRssItem(config, feedItem) {
 		.replace("*", "");
 
 
-	convertRssItem(file, function(outFile) {
-		console.log('Converted to ' + outFile);
-
-			var email     = new sendgrid.Email({
-		  to:       [config.kindleEmail],
-		  from:     config.SendGridFromEmail,
-		  replyto: 'jason@ytechie.com', //for troubleshooting
-		  subject:  'convert', //Tells the kindle to conver it to it's internal format
-			text: 'Your article via RSS as requested.'
-		});
-
-		email.addFile({
-		 // filename: 'post.docx',
-		  //content: body
-		  filename: cleanTitle + '.docx',
-		  path: outFile,
-		});
-
-		console.log('Emailing ' + feedItem.title);
-		if(!config.SimulateEmailSend) {
-			sendgrid.send(email, function(err, json) {
-			  if (err) { return console.error(err); }
-			  if(json.message === 'success') {
-			  	console.log('Successfully sent to ' + email.to);
-			  } else {
-			    console.log(json);
-			  }
-			});
-		}
+	var email = new sendgrid.Email({
+		to:  [config.kindleEmail],
+		from: config.SendGridFromEmail,
+		subject: 'convert', //Tells the kindle to conver it to it's internal format
+		text: 'Your article via RSS as requested.'
 	});
 
+	email.addFile({
+		filename: cleanTitle + '.docx',
+		path: file,
+	});
 
-}
-
-function convertRssItem(file, callback) {
-	var outFile = file.substring(0, file.lastIndexOf('.')) + '.docx';
-	var cmd = 'Pandoc\\pandoc.exe -o "' + outFile + '" "' + file + '"';
-	
-		console.log('Converting doc using ' + cmd);
-		exec(cmd).on('exit', function() {
-			console.log('Converted');
-			callback(outFile);
+	console.log('Emailing ' + feedItem.title);
+	if(config.SimulateEmailSend) {
+		console.log('Simulated sending complete');
+	} else {
+		sendgrid.send(email, function(err, json) {
+		  if (err) { return console.error(err); }
+		  if(json.message === 'success') {
+		  	console.log('Successfully sent to ' + email.to);
+		  } else {
+		    console.log(json);
+		  }
 		});
+	}
 }
