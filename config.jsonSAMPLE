@@ -1,0 +1,9 @@
+{
+	"kindleEmail": "",
+	"SendGridApiUser": "",
+	"SendGridApiKey": "",
+	"SendGridFromEmail": "",
+	"SimulateEmailSend": false,
+	"Feeds": ["http://www.ytechie.com/feed/",
+	"http://msdevshow.libsyn.com/rss"]
+}

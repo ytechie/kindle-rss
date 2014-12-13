@@ -16,7 +16,11 @@ function loadFileCache() {
 		} else {
 			console.log('Database Loaded');
 		  
+		  	try {
 			var db = JSON.parse(data);
+			} catch(err2) {
+				deferred.reject(err2);
+			}
 			//console.log(db);
 			deferred.resolve(db);			
 		}

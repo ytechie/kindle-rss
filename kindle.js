@@ -7,18 +7,18 @@ var FeedParser = require('feedparser');
 var articleExporter = require('./articleExporter.js');
 var fileDatabase = require('./fileDatabase.js');
 
+//Q.longStackSupport = true;
+
 run();
 
 function run() {
 	var config;
 	var cache;
+	var newItems = [];
 
 	fileDatabase.loadFileCache()
 		.then(function(loadedCache) {
 			cache = loadedCache;
-
-			console.log('Cache:');
-			console.log(JSON.stringify(cache));
 		})
 		.then(loadConfig)
 		.then(function(loadedConfig) {
@@ -26,24 +26,25 @@ function run() {
 		})
 		.then(articleExporter.initialize)
 		.then(function() {
-			return processAllFeeds(
-				{
-					feeds: config.Feeds,
-					cache: cache,
-					send: function(feedItem, file, cb) {
-						emailRssItem({feedItem: feedItem, config: config, file: file}, cb);
-					}
-				});
+			return processAllFeeds({feeds: config.Feeds, cache: cache});
+		})
+		.then(function(feedsResults) {
+			feedsResults.forEach(function(feedResult) {
+				if(feedResult.state === 'fulfilled') {
+					newItems = newItems.concat(feedResult.value);
+				}
+				
+            });
+            return emailRssItems(newItems, config);
 		})
 		.then(function() {
-			return fileDatabase.saveFileCache(cache);
+			fileDatabase.saveFileCache(cache);
 		})
 		.catch(function(error) {
-			console.error(error);
+			console.log(error.stack);
 		})
 		.done();
 }
-
 
 function loadConfig() {
 	var deferral = Q.defer();
@@ -61,11 +62,10 @@ function loadConfig() {
 	return deferral.promise;
 }
 
-
+//returns array of promises
 function processAllFeeds(options) {
 	//options.feeds
 	//options.cache
-	//options.send
 
 	var feedUrl;
 	var feedDb;
@@ -86,8 +86,7 @@ function processAllFeeds(options) {
 		feedPromises[i] = processFeed(
 			{
 				feedUrl: feedUrl,
-				feedCache: cache.feeds[feedUrl], //passed by ref
-				send: options.send
+				feedCache: cache.feeds[feedUrl] //passed by ref
 			});
 	}
 
@@ -95,77 +94,79 @@ function processAllFeeds(options) {
 }
 
 function processFeed(options) {
-	// options.feedUrl
-	// options.feedCache
-	// options.send
+	var feedUrl = options.feedUrl,
+		feedCache = options.feedCache,
 
-	var deferral = Q.defer();
-
-	var newestItem;
-	var req = request(options.feedUrl),
-		feedparser = new FeedParser({});
+		deferral = Q.defer(),
+		req = request(feedUrl),
+		feedparser = new FeedParser({}),
+		newItems = [],
+		stream,
+		i,
+		item;
 
 	req.on('error', function (error) {
 		deferral.reject(error);
-	});
-	req.on('response', function (res) {
-	  var stream = this;
+	}).on('response', function (res) {
+		stream = this;
 
-	  if (res.statusCode != 200) return this.emit('error', new Error('Bad status code'));
+		if (res.statusCode != 200) {
+			deferral.reject(new Error('Bad status code'));
+		}
 
-	  stream.pipe(feedparser);
+		stream.pipe(feedparser);
 
-	  stream.on('end', function() {
-	  	console.log('Done processing ' + options.feedUrl);
+		stream.on('end', function() {
+			//Update our last pub date cache
+			for(i = 0; i < newItems.length; i++) {
+				if(!feedCache.lastPubDateSent || newItems[i].pubDate > feedCache.lastPubDateSent) {
+					feedCache.lastPubDateSent = newItems[i].pubDate;
+				}
+			}
 
-	  	//Note: this will send the latest of each feed the first time
-
-	  	if(newestItem) {
-		  	options.feedCache.newestItem = newestItem.pubDate;
-		  	if(!options.feedCache.lastPubDateSent || options.feedCache.lastPubDateSent < options.feedCache.newestItem) {
-		  		console.log('Exporting article "' + newestItem.title + '"...')
-
-		  		articleExporter.exportArticle(newestItem.title, newestItem.body)
-		  			.then(function(fileName) {
-		  				console.log('Sending article...');
-		  				options.send(newestItem, fileName, function() {
-		  					//item sent!
-		  					options.feedCache.lastPubDateSent = options.feedCache.newestItem;
-		  					console.log('Sent successfully');
-		  					deferral.resolve();
-		  				});
-		  			});
-		  	} else {
-		  		deferral.resolve();
-		  	}
-		  } else {
-		  	console.log('No items in the feed');
-		  	deferral.resolve();
-		  }
-	  });
+			console.log('Done processing ' + feedUrl);
+			deferral.resolve(newItems);
+		});
 	});
 
 	feedparser.on('error', function(error) {
-	  deferral.reject(error);
+		deferral.reject(error);
 	});
 	feedparser.on('readable', function() {
-	  // This is where the action is!
-	  var stream = this
-	    , meta = this.meta // **NOTE** the "meta" is always available in the context of the feedparser instance
-	    , item;
+		stream = this
+		, meta = this.meta // **NOTE** the "meta" is always available in the context of the feedparser instance
+		, item;
 
-	  while (item = stream.read()) {
-	    //Check if this is the newest (or first) item
-	    if(!newestItem || item.pubDate > newestItem.pubDate) {
-			newestItem = item;
-		}
-	  }  
+		while (item = stream.read()) {
+			if(feedCache.lastPubDateSent) {
+				if(item.pubDate > feedCache.lastPubDateSent) {
+					newItems.push(item);
+				}
+			} else {
+				//If we've never sent an email before, let's send the latest item
+
+				if(newItems.length === 0) {
+					newItems.push(item);
+				} else if(item.pubDate > newItems[0].pubDate) {
+					newItems[0] = item;
+				}
+			}
+		}  
 	});
 
 	return deferral.promise;
 }
 
-function emailRssItem(options, cb) {
+function emailRssItems(newItems, config) {
+	newItems.forEach(function(newItem) {
+		articleExporter.exportArticle(newItem.title, newItem.description)
+			.then(function(exportFileName) {
+				emailRssItem({feedItem: newItem, file: exportFileName, config: config});
+			});
+	});
+}
+
+function emailRssItem(options) {
 	var feedItem = options.feedItem;
 	var file = options.file;
 	var config = options.config;
