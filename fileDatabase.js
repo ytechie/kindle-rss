@@ -17,7 +17,11 @@ function loadFileCache() {
 			console.log('Database Loaded');
 		  
 		  	try {
-			var db = JSON.parse(data);
+                var db = JSON.parse(data);
+
+                for (var key in db.feeds) {
+                    db.feeds[key].lastPubDateSent = new Date(db.feeds[key].lastPubDateSent);
+                }
 			} catch(err2) {
 				deferred.reject(err2);
 			}
