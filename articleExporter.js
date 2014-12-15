@@ -103,6 +103,9 @@ function convertHtmlDocToDocx(options) {
 	exec(cmd).on('exit', function() {
 		console.log('Converted');
 		deferral.resolve({ docxFile: outFile });
+    })
+    .on('error', function(err) {
+	    deferral.reject(err);
 	});
 
 	return deferral.promise;
