@@ -1,5 +1,7 @@
 {
-	"kindleEmail": "",
+    "kindleEmail": "",
+    "DocDbHostName": "https://??????.documents.azure.com:443/",
+	"DocDbMasterKey": "",
 	"SendGridApiUser": "",
 	"SendGridApiKey": "",
 	"SendGridFromEmail": "",

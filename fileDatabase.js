@@ -4,11 +4,12 @@ var fs = require('fs');
 var dbFileName = "cache.json";
 
 function loadFileCache() {
-	var deferred = Q.defer();
+    var deferred = Q.defer(),
+        db;
 
 	console.log('Loading local database...');
 
-	fs.readFile(dbFileName, function (err, data) {
+    fs.readFile(dbFileName, function (err, data) {
 		if (err) {
 			saveFileCache({feeds:{}})
 				.then(loadFileCache)
@@ -17,7 +18,7 @@ function loadFileCache() {
 			console.log('Database Loaded');
 		  
 		  	try {
-                var db = JSON.parse(data);
+                db = JSON.parse(data);
 
                 for (var key in db.feeds) {
                     db.feeds[key].lastPubDateSent = new Date(db.feeds[key].lastPubDateSent);
@@ -48,5 +49,5 @@ function saveFileCache(cache) {
 	return deferred.promise;
 }
 
-exports.loadFileCache = loadFileCache;
-exports.saveFileCache = saveFileCache;
+exports.loadCache = loadFileCache;
+exports.saveCache = saveFileCache;

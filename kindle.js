@@ -5,7 +5,8 @@ var exec = require('child_process').exec;
 var FeedParser = require('feedparser');
 
 var articleExporter = require('./articleExporter.js');
-var fileDatabase = require('./fileDatabase.js');
+//var database = require('./fileDatabase.js');
+var database = require('./docDb.js');
 
 //Q.longStackSupport = true;
 
@@ -16,13 +17,14 @@ function run() {
 	var cache;
 	var newItems = [];
 
-	fileDatabase.loadFileCache()
-		.then(function(loadedCache) {
-			cache = loadedCache;
-		})
-		.then(loadConfig)
+	loadConfig()
 		.then(function(loadedConfig) {
 			config = loadedConfig;
+			return database.initialize({hostName: loadedConfig.DocDbHostName, masterKey: loadedConfig.DocDbMasterKey});
+		})
+		.then(database.loadCache)
+		.then(function(loadedCache) {
+			cache = loadedCache;
 		})
 		.then(articleExporter.initialize)
 		.then(function() {
@@ -38,7 +40,7 @@ function run() {
             return emailRssItems(newItems, config);
 		})
 		.then(function() {
-			fileDatabase.saveFileCache(cache);
+            database.saveCache(cache);
 		})
 		.catch(function(error) {
 			console.log(error.stack);

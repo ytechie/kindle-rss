@@ -7,3 +7,7 @@ pandoc.msi
 config.json
 cache.json
 *.zip
+.ntvs_analysis.dat
+bin/*
+obj/*
+*.suo
