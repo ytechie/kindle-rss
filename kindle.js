@@ -19,7 +19,8 @@ function run() {
 
 	loadConfig()
 		.then(function(loadedConfig) {
-			config = loadedConfig;
+            config = loadedConfig;
+	        showWarningIfSimulating(config);
 			return database.initialize({hostName: loadedConfig.DocDbHostName, masterKey: loadedConfig.DocDbMasterKey});
 		})
 		.then(database.loadCache)
@@ -46,6 +47,16 @@ function run() {
 			console.log(error.stack);
 		})
 		.done();
+}
+
+function showWarningIfSimulating(config) {
+    //I was running this script for a while in simulation mode wondering why it wasn't working...
+
+    if (config.SimulateEmailSend) {
+        console.log("\n*******************************************************");
+        console.log("***** WARNING: YOU ARE RUNNING IN SIMULATION MODE *****");
+        console.log("*******************************************************\n");
+    }
 }
 
 function loadConfig() {
